@@ -1,6 +1,6 @@
 {
   "name": "@jackjtaylor/pi-sdlc-modes",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Guide Pi through the Software Development Lifecycle (SDLC) with customisable modes.",
   "type": "module",
   "scripts": {
