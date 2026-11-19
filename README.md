@@ -1,6 +1,6 @@
 # @jackjtaylor/pi-sdlc-modes
 
-This packages has modes to guide Pi through the stages of software development, from exploring a codebase to preparing a release.
+This package has modes to guide Pi through the stages of software development, from exploring a codebase to preparing a release.
 
 ## Install
 
@@ -32,7 +32,7 @@ pi -p --sdlc-off "Please answer my question..."
 - `--sdlc-mode <id>` starts a new session in that mode.
 - `--sdlc-off` starts a new session with the extension disabled.
 
-The flags apply only to new sessions. If you resume a session, it'll keep its mode and on/off state.
+The flags apply only to new sessions. If you resume a session, it'll keep its mode and enabled or disabled state.
 
 ## Configure
 
