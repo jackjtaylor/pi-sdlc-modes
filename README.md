@@ -20,6 +20,20 @@ The modes guide Pi's responses and how it should work. They don't forbid tools, 
 
 When the extension is off, Pi won't be able to change modes, and it won't see any system prompt info or context about the extension. If you re-enable the extension, the tool will be available again for Pi to use, and it'll see context about the selected mode.
 
+### Start Sessions in a Mode
+
+You can set flags when starting Pi, for example, with a subagent.
+
+```bash
+pi -p --sdlc-mode build-and-test "Please read the plan and..."
+pi -p --sdlc-off "Please answer my question..."
+```
+
+- `--sdlc-mode <id>` starts a new session in that mode.
+- `--sdlc-off` starts a new session with the extension disabled.
+
+The flags apply only to new sessions. If you resume a session, it'll keep its mode and on/off state.
+
 ## Configure
 
 The defaults are in `DEFAULTS.json`.

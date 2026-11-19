@@ -19,6 +19,10 @@ export default function sdlcModesExtension(pi: ExtensionAPI): void {
   const config = loadConfig();
   let activeModeId = config.initialMode;
   let sdlcEnabled = true;
+  // The tool list from --tools is process-wide, so exclusion is decided once, on the first
+  // session start, before SDLC has touched the tools. Later sessions reuse that decision.
+  let modeToolExclusionChecked = false;
+  let modeToolExcludedByUser = false;
 
   const firstConfiguredMode = config.modes[0];
   if (!firstConfiguredMode) throw new Error("SDLC configuration must contain at least one mode.");
@@ -112,11 +116,62 @@ export default function sdlcModesExtension(pi: ExtensionAPI): void {
     setMode(nextMode.id, ctx);
   };
 
+  const hasSdlcHistory = (ctx: ExtensionContext): boolean =>
+    ctx.sessionManager
+      .getBranch()
+      .some(
+        (entry) =>
+          entry.type === "custom" &&
+          (entry.customType === STATE_ENTRY_TYPE || entry.customType === ENABLED_STATE_ENTRY_TYPE),
+      );
+
+  const updateModeToolExclusion = (ctx: ExtensionContext): void => {
+    if (modeToolExclusionChecked) return;
+    modeToolExclusionChecked = true;
+    modeToolExcludedByUser = !hasSdlcHistory(ctx) && !pi.getActiveTools().includes(SET_MODE_TOOL_NAME);
+  };
+
+  // --sdlc-mode and --sdlc-off set the starting state of a new session only. Resumed or
+  // branched sessions keep their saved state. The chosen values are recorded in the session.
+  // A startup error (an unknown --sdlc-mode) is kept and blocks every prompt. Pi has no
+  // startup abort, and ctx.shutdown() is a no-op in print mode, so input is refused instead.
+  let startupError: string | undefined;
+
+  const applyStartupFlags = (ctx: ExtensionContext): void => {
+    startupError = undefined;
+    if (hasSdlcHistory(ctx)) return;
+
+    const requestedModeId = pi.getFlag("sdlc-mode");
+    if (typeof requestedModeId === "string" && requestedModeId.length > 0) {
+      const requestedMode = config.modes.find((mode) => mode.id === requestedModeId);
+      if (!requestedMode) {
+        const availableModes = config.modes.map((mode) => mode.id).join(", ");
+        startupError = `Unknown SDLC mode "${requestedModeId}" for --sdlc-mode. Available: ${availableModes}.`;
+        ctx.ui.notify(startupError, "error");
+        return;
+      }
+      activeModeId = requestedMode.id;
+      pi.appendEntry<ModeStateEntry>(STATE_ENTRY_TYPE, {
+        modeId: requestedMode.id,
+        modeName: requestedMode.name,
+        description: requestedMode.description,
+        changedAt: Date.now(),
+      });
+    }
+
+    if (pi.getFlag("sdlc-off") === true) {
+      sdlcEnabled = false;
+      pi.appendEntry<EnabledStateEntry>(ENABLED_STATE_ENTRY_TYPE, { enabled: false, changedAt: Date.now() });
+    }
+  };
+
   // Pi only declares a tool's guidelines to the model while the tool is active, so
   // disabling SDLC also removes the mode-switch tool and its rules from the prompt.
+  // A tool the user excluded stays excluded, even when SDLC is on.
   const syncModeToolActivation = (): void => {
     const otherActiveToolNames = pi.getActiveTools().filter((name) => name !== SET_MODE_TOOL_NAME);
-    pi.setActiveTools(sdlcEnabled ? [...otherActiveToolNames, SET_MODE_TOOL_NAME] : otherActiveToolNames);
+    const includeModeTool = sdlcEnabled && !modeToolExcludedByUser;
+    pi.setActiveTools(includeModeTool ? [...otherActiveToolNames, SET_MODE_TOOL_NAME] : otherActiveToolNames);
   };
 
   const setSdlcEnabled = (enabled: boolean, ctx: ExtensionContext): void => {
@@ -128,6 +183,10 @@ export default function sdlcModesExtension(pi: ExtensionAPI): void {
     syncModeToolActivation();
     pi.appendEntry<EnabledStateEntry>(ENABLED_STATE_ENTRY_TYPE, { enabled, changedAt: Date.now() });
     updateModeIndicator(ctx);
+    if (enabled && modeToolExcludedByUser) {
+      ctx.ui.notify(`SDLC turned on, but ${SET_MODE_TOOL_NAME} is excluded from the session's tools.`, "warning");
+      return;
+    }
     ctx.ui.notify(`SDLC turned ${enabled ? "on" : "off"}.`, "info");
   };
 
@@ -206,6 +265,17 @@ export default function sdlcModesExtension(pi: ExtensionAPI): void {
     handler: async (args, ctx) => selectMode(args, ctx),
   });
 
+  pi.registerFlag("sdlc-mode", {
+    description: "Start a new session in this SDLC mode ID",
+    type: "string",
+  });
+
+  pi.registerFlag("sdlc-off", {
+    description: "Start a new session with SDLC turned off",
+    type: "boolean",
+    default: false,
+  });
+
   pi.registerShortcut(config.cycleShortcut, {
     description: "Advance to the next SDLC mode when SDLC is on",
     handler: async (ctx) => cycleMode(ctx),
@@ -214,6 +284,8 @@ export default function sdlcModesExtension(pi: ExtensionAPI): void {
   pi.on("session_start", async (_event, ctx) => {
     restoreModeFromBranch(ctx);
     restoreEnabledStateFromBranch(ctx);
+    updateModeToolExclusion(ctx);
+    applyStartupFlags(ctx);
     syncModeToolActivation();
     updateModeIndicator(ctx);
   });
@@ -221,8 +293,16 @@ export default function sdlcModesExtension(pi: ExtensionAPI): void {
   pi.on("session_tree", async (_event, ctx) => {
     restoreModeFromBranch(ctx);
     restoreEnabledStateFromBranch(ctx);
+    updateModeToolExclusion(ctx);
     syncModeToolActivation();
     updateModeIndicator(ctx);
+  });
+
+  pi.on("input", (_event, ctx) => {
+    if (startupError === undefined) return { action: "continue" };
+    ctx.ui.notify(startupError, "error");
+    process.exitCode = 1;
+    return { action: "handled" };
   });
 
   pi.on("before_agent_start", (event) => {
@@ -237,9 +317,13 @@ export default function sdlcModesExtension(pi: ExtensionAPI): void {
       "",
       mode.instructions,
       "",
-      "## Changing SDLC Modes",
-      "Use sdlc_set_mode only when the user explicitly requests a mode change or clearly authorizes moving to that phase.",
-      "Do not switch merely because another mode seems useful. If the user's intent is unclear, ask and wait for confirmation.",
+      ...(modeToolExcludedByUser
+        ? []
+        : [
+            "## Changing SDLC Modes",
+            "Use sdlc_set_mode only when the user explicitly requests a mode change or clearly authorizes moving to that phase.",
+            "Do not switch merely because another mode seems useful. If the user's intent is unclear, ask and wait for confirmation.",
+          ]),
     ].join("\n");
   });
 }

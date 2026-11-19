@@ -46,6 +46,8 @@ async function withExtension(run) {
     const statusUpdates = [];
     const pickerCalls = [];
     const activeTools = ["read", "bash", "edit", "write", "sdlc_set_mode"];
+    const flagValues = {};
+    const registeredFlags = new Map();
     let pickerSelection = "Build";
 
     const pi = {
@@ -59,6 +61,8 @@ async function withExtension(run) {
         branchEntries.push(entry);
       },
       on: (event, handler) => hooks.set(event, handler),
+      registerFlag: (name, options) => registeredFlags.set(name, options),
+      getFlag: (name) => flagValues[name] ?? registeredFlags.get(name)?.default,
       getActiveTools: () => [...activeTools],
       setActiveTools: (names) => {
         activeTools.splice(0, activeTools.length, ...names);
@@ -93,6 +97,8 @@ async function withExtension(run) {
       statusUpdates,
       pickerCalls,
       activeTools,
+      flagValues,
+      registeredFlags,
       setPickerSelection: (value) => {
         pickerSelection = value;
       },
@@ -138,7 +144,7 @@ test("picker-only mode selection, shortcuts, and the session-scoped on/off toggl
     assert.ok(entryRenderers.has("sdlc-mode-enabled-state"), "registers the enabled-state renderer");
     assert.deepEqual(
       [...hooks.keys()].sort(),
-      ["before_agent_start", "session_start", "session_tree"],
+      ["before_agent_start", "input", "session_start", "session_tree"],
       "registers all SDLC lifecycle hooks",
     );
 
@@ -238,5 +244,158 @@ test("invalid saved mode and enabled-state entries do not restore invalid state"
     hooks.get("before_agent_start")(promptEvent);
     assert.match(promptEvent.systemPromptOptions.sections.sdlc_mode, /^## Active SDLC Mode: Discovery\n/);
     assert.equal(activeTools.includes("sdlc_set_mode"), true, "invalid enabled state falls back to on");
+  });
+});
+
+test("session tree navigation restores the mode, enabled state, and mode-switch tool", async () => {
+  await withExtension(async ({ hooks, branchEntries, context, activeTools }) => {
+    branchEntries.push(
+      {
+        type: "custom",
+        customType: "sdlc-mode-state",
+        data: { modeId: "build", modeName: "Build", description: "Fixture build description.", changedAt: 1 },
+      },
+      { type: "custom", customType: "sdlc-mode-enabled-state", data: { enabled: false, changedAt: 2 } },
+    );
+
+    await hooks.get("session_tree")({}, context);
+    const offPrompt = createPromptEvent();
+    hooks.get("before_agent_start")(offPrompt);
+    assert.equal("sdlc_mode" in offPrompt.systemPromptOptions.sections, false, "tree navigation restores off");
+    assert.equal(activeTools.includes("sdlc_set_mode"), false, "tree navigation removes the mode-switch tool when off");
+
+    branchEntries.push({
+      type: "custom",
+      customType: "sdlc-mode-enabled-state",
+      data: { enabled: true, changedAt: 3 },
+    });
+    await hooks.get("session_tree")({}, context);
+    const onPrompt = createPromptEvent();
+    hooks.get("before_agent_start")(onPrompt);
+    assert.match(onPrompt.systemPromptOptions.sections.sdlc_mode, /^## Active SDLC Mode: Build\n/);
+    assert.equal(activeTools.includes("sdlc_set_mode"), true, "tree navigation restores the mode-switch tool when on");
+  });
+});
+
+test("a mode-switch tool excluded from the session's tools stays excluded", async () => {
+  await withExtension(async ({ commands, hooks, activeTools, notifications, context }) => {
+    activeTools.splice(0, activeTools.length, "read", "grep");
+
+    await hooks.get("session_start")({}, context);
+    assert.deepEqual(activeTools, ["read", "grep"], "a fresh session does not add an excluded tool");
+
+    const promptEvent = createPromptEvent();
+    hooks.get("before_agent_start")(promptEvent);
+    assert.match(promptEvent.systemPromptOptions.sections.sdlc_mode, /^## Active SDLC Mode: Discovery\n/);
+    assert.equal(
+      promptEvent.systemPromptOptions.sections.sdlc_mode.includes("## Changing SDLC Modes"),
+      false,
+      "guidance that refers to the excluded tool is omitted",
+    );
+
+    await commands.get("sdlc").handler("on", context);
+    assert.deepEqual(activeTools, ["read", "grep"], "SDLC on does not re-add an excluded tool");
+    assert.equal(notifications.at(-1)[1], "info", "SDLC was already on");
+  });
+});
+
+test("a resumed session keeps the mode-switch tool available after SDLC was turned off", async () => {
+  await withExtension(async ({ commands, hooks, activeTools, branchEntries, context }) => {
+    branchEntries.push({
+      type: "custom",
+      customType: "sdlc-mode-enabled-state",
+      data: { enabled: false, changedAt: 1 },
+    });
+    activeTools.splice(0, activeTools.length, "read", "grep");
+
+    await hooks.get("session_start")({}, context);
+    assert.deepEqual(activeTools, ["read", "grep"], "off keeps the tool removed");
+
+    branchEntries.push({
+      type: "custom",
+      customType: "sdlc-mode-enabled-state",
+      data: { enabled: true, changedAt: 2 },
+    });
+    await commands.get("sdlc").handler("on", context);
+    assert.equal(activeTools.includes("sdlc_set_mode"), true, "a session with SDLC history is not treated as excluded");
+  });
+});
+
+test("--sdlc-mode and --sdlc-off set the starting state of a new session and record it", async () => {
+  await withExtension(async ({ hooks, flagValues, registeredFlags, appendedEntries, branchEntries, context }) => {
+    assert.ok(registeredFlags.has("sdlc-mode"), "registers --sdlc-mode");
+    assert.ok(registeredFlags.has("sdlc-off"), "registers --sdlc-off");
+
+    flagValues["sdlc-mode"] = "build";
+    flagValues["sdlc-off"] = true;
+    await hooks.get("session_start")({}, context);
+
+    assert.deepEqual(
+      appendedEntries.map((entry) => entry.customType),
+      ["sdlc-mode-state", "sdlc-mode-enabled-state"],
+      "records the flag-selected mode and the off state",
+    );
+    assert.equal(appendedEntries[0].data.modeId, "build");
+    assert.equal(appendedEntries[1].data.enabled, false);
+
+    branchEntries.push(...appendedEntries);
+    const promptEvent = createPromptEvent();
+    hooks.get("before_agent_start")(promptEvent);
+    assert.equal("sdlc_mode" in promptEvent.systemPromptOptions.sections, false, "--sdlc-off disables SDLC");
+  });
+});
+
+test("an unknown --sdlc-mode blocks every prompt with a non-zero exit and records nothing", async () => {
+  const previousExitCode = process.exitCode;
+  try {
+    await withExtension(async ({ hooks, flagValues, appendedEntries, notifications, context }) => {
+      flagValues["sdlc-mode"] = "not-a-mode";
+      flagValues["sdlc-off"] = true;
+      await hooks.get("session_start")({}, context);
+      assert.equal(appendedEntries.length, 0, "an unknown mode records nothing, and --sdlc-off is not applied");
+      assert.match(
+        notifications.at(-1)[0],
+        /^Unknown SDLC mode "not-a-mode" for --sdlc-mode\. Available: discovery, build\.$/,
+      );
+
+      const result = hooks.get("input")({ text: "hello", source: "interactive" }, context);
+      assert.deepEqual(result, { action: "handled" }, "the prompt is handled without calling the model");
+      assert.equal(process.exitCode, 1, "the process exits non-zero");
+    });
+  } finally {
+    process.exitCode = previousExitCode;
+  }
+});
+
+test("a resumed session ignores the startup flags", async () => {
+  await withExtension(async ({ hooks, flagValues, appendedEntries, branchEntries, context }) => {
+    flagValues["sdlc-mode"] = "build";
+    flagValues["sdlc-off"] = true;
+    branchEntries.push({
+      type: "custom",
+      customType: "sdlc-mode-state",
+      data: { modeId: "discovery", modeName: "Discovery", description: "Fixture discovery description.", changedAt: 1 },
+    });
+    await hooks.get("session_start")({}, context);
+    assert.equal(appendedEntries.length, 0, "resumed sessions do not record flag values");
+    assert.deepEqual(hooks.get("input")({ text: "hello", source: "interactive" }, context), { action: "continue" });
+    const promptEvent = createPromptEvent();
+    hooks.get("before_agent_start")(promptEvent);
+    assert.match(promptEvent.systemPromptOptions.sections.sdlc_mode, /^## Active SDLC Mode: Discovery\n/);
+  });
+});
+
+test("--sdlc-mode alone sets the mode and keeps SDLC on", async () => {
+  await withExtension(async ({ hooks, flagValues, appendedEntries, activeTools, context }) => {
+    flagValues["sdlc-mode"] = "build";
+    await hooks.get("session_start")({}, context);
+    assert.deepEqual(
+      appendedEntries.map((entry) => entry.customType),
+      ["sdlc-mode-state"],
+    );
+    assert.equal(activeTools.includes("sdlc_set_mode"), true, "SDLC stays on with its tool");
+    const promptEvent = createPromptEvent();
+    hooks.get("before_agent_start")(promptEvent);
+    assert.match(promptEvent.systemPromptOptions.sections.sdlc_mode, /^## Active SDLC Mode: Build\n/);
   });
 });
