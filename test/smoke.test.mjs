@@ -46,6 +46,7 @@ async function withExtension(run) {
     const statusUpdates = [];
     const pickerCalls = [];
     const activeTools = ["read", "bash", "edit", "write", "sdlc_set_mode"];
+    const configuredTools = ["read", "bash", "edit", "write", "sdlc_set_mode"];
     const flagValues = {};
     const registeredFlags = new Map();
     let pickerSelection = "Build";
@@ -64,6 +65,7 @@ async function withExtension(run) {
       registerFlag: (name, options) => registeredFlags.set(name, options),
       getFlag: (name) => flagValues[name] ?? registeredFlags.get(name)?.default,
       getActiveTools: () => [...activeTools],
+      getAllTools: () => configuredTools.map((name) => ({ name })),
       setActiveTools: (names) => {
         activeTools.splice(0, activeTools.length, ...names);
       },
@@ -97,6 +99,7 @@ async function withExtension(run) {
       statusUpdates,
       pickerCalls,
       activeTools,
+      configuredTools,
       flagValues,
       registeredFlags,
       setPickerSelection: (value) => {
@@ -278,8 +281,9 @@ test("session tree navigation restores the mode, enabled state, and mode-switch 
 });
 
 test("a mode-switch tool excluded from the session's tools stays excluded", async () => {
-  await withExtension(async ({ commands, hooks, activeTools, notifications, context }) => {
+  await withExtension(async ({ commands, hooks, activeTools, configuredTools, notifications, context }) => {
     activeTools.splice(0, activeTools.length, "read", "grep");
+    configuredTools.splice(configuredTools.indexOf("sdlc_set_mode"), 1);
 
     await hooks.get("session_start")({}, context);
     assert.deepEqual(activeTools, ["read", "grep"], "a fresh session does not add an excluded tool");
@@ -296,6 +300,22 @@ test("a mode-switch tool excluded from the session's tools stays excluded", asyn
     await commands.get("sdlc").handler("on", context);
     assert.deepEqual(activeTools, ["read", "grep"], "SDLC on does not re-add an excluded tool");
     assert.equal(notifications.at(-1)[1], "info", "SDLC was already on");
+  });
+});
+
+test("a resumed session with an explicit tool exclusion does not restore the mode-switch tool", async () => {
+  await withExtension(async ({ commands, hooks, activeTools, configuredTools, branchEntries, context }) => {
+    branchEntries.push({
+      type: "custom",
+      customType: "sdlc-mode-enabled-state",
+      data: { enabled: false, changedAt: 1 },
+    });
+    activeTools.splice(0, activeTools.length, "read", "grep");
+    configuredTools.splice(configuredTools.indexOf("sdlc_set_mode"), 1);
+
+    await hooks.get("session_start")({}, context);
+    await commands.get("sdlc").handler("on", context);
+    assert.deepEqual(activeTools, ["read", "grep"], "saved SDLC history does not override an explicit tool exclusion");
   });
 });
 

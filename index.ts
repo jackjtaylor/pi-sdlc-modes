@@ -125,10 +125,12 @@ export default function sdlcModesExtension(pi: ExtensionAPI): void {
           (entry.customType === STATE_ENTRY_TYPE || entry.customType === ENABLED_STATE_ENTRY_TYPE),
       );
 
-  const updateModeToolExclusion = (ctx: ExtensionContext): void => {
+  const updateModeToolExclusion = (): void => {
     if (modeToolExclusionChecked) return;
     modeToolExclusionChecked = true;
-    modeToolExcludedByUser = !hasSdlcHistory(ctx) && !pi.getActiveTools().includes(SET_MODE_TOOL_NAME);
+    // Inactive is not the same as excluded: a resumed branch may have turned SDLC off.
+    // getAllTools omits tools filtered out by --tools / --exclude-tools.
+    modeToolExcludedByUser = !pi.getAllTools().some((tool) => tool.name === SET_MODE_TOOL_NAME);
   };
 
   // --sdlc-mode and --sdlc-off set the starting state of a new session only. Resumed or
@@ -284,7 +286,7 @@ export default function sdlcModesExtension(pi: ExtensionAPI): void {
   pi.on("session_start", async (_event, ctx) => {
     restoreModeFromBranch(ctx);
     restoreEnabledStateFromBranch(ctx);
-    updateModeToolExclusion(ctx);
+    updateModeToolExclusion();
     applyStartupFlags(ctx);
     syncModeToolActivation();
     updateModeIndicator(ctx);
@@ -293,7 +295,7 @@ export default function sdlcModesExtension(pi: ExtensionAPI): void {
   pi.on("session_tree", async (_event, ctx) => {
     restoreModeFromBranch(ctx);
     restoreEnabledStateFromBranch(ctx);
-    updateModeToolExclusion(ctx);
+    updateModeToolExclusion();
     syncModeToolActivation();
     updateModeIndicator(ctx);
   });
