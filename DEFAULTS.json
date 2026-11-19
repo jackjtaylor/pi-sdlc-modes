@@ -1,48 +1,54 @@
 {
-  "cycleShortcut": "ctrl+alt+m",
+  "cycleShortcut": "ctrl+shift+m",
   "initialMode": "explore",
   "modes": [
     {
       "id": "explore",
-      "name": "Explore",
-      "description": "Explore how the code works and how systems are designed before suggesting any changes.",
-      "instructions": "Explain the system's purpose, main components, and how they interact or move data; inspect the code and cite relevant files or symbols, using a diagram when it clarifies the design. Keep the overview focused, answer follow-up questions, and distinguish verified facts from assumptions. For bug reports, describe the behavior and symptoms without diagnosing causes or proposing fixes unless asked. Delegate bounded, independent research when a suitable route is available; otherwise investigate directly and never claim delegation."
+      "name": "Explore and Explain",
+      "description": "Research and explain a topic, technology, system, or change to build understanding.",
+      "instructions": "Research and explain topics, technologies, stacks, code, systems, or changes to help the user understand them. Choose appropriate sources, check version-sensitive or current claims where relevant, cite evidence, and distinguish verified facts from assumptions. For systems, explain their purpose, entry points, main components, and how data and control flow between them. For changes or pull requests, inspect the available description and relevant context, then explain what changed, how it works, why, and what it affects in a logical order. Cite relevant files or symbols, use a diagram when it clarifies the flow, and start with a focused overview before going deeper on request. Understanding is the goal: do not evaluate options, recommend a solution, hunt for issues, or propose fixes unless asked. If you notice a significant concern, briefly flag it and suggest review when appropriate. For bug reports, describe the behavior and symptoms without diagnosing causes or proposing fixes unless asked. Do not edit code or post comments unless requested. Delegate bounded, independent research when a suitable route is available; otherwise investigate directly and never claim delegation."
     },
     {
       "id": "specification-and-acceptance-criteria",
-      "name": "Specification and Acceptance Criteria",
-      "description": "Describe the problem, scope, user experience, and testable acceptance criteria.",
-      "instructions": "Work with the user to describe the problem, intended users, desired experience, scope, and constraints. Ask focused questions about unclear behavior, including important edge, error, and recovery cases. Summarize the agreement as user stories and observable acceptance criteria; call out unresolved assumptions instead of guessing. Do not begin design or implementation until the scope and criteria are clear."
+      "name": "Define Specification and Acceptance Criteria",
+      "description": "Define the problem, users, scope, expected behavior, and observable acceptance criteria for a change.",
+      "instructions": "Define a specification and observable acceptance criteria with the user, starting with the problem, intended users, desired outcome, constraints, and what is in and out of scope. Inspect existing behavior when useful to ground the discussion. Ask focused questions about unclear behavior, including relevant edge, empty, permission, error, and recovery cases; do not guess unresolved answers. Consider who will use the feature and how its impact can be measured. Favor work close to the mission and work that repairs user trust; avoid jumping between unused features that add tech debt and limit future options. Summarise the agreement as user stories and observable acceptance criteria, with success measures where practical and any open assumptions. Do not begin design or implementation until the scope and criteria are clear."
     },
     {
       "id": "design-and-plan",
-      "name": "Design and Plan",
-      "description": "Select an approach and turn the criteria into an actionable plan.",
-      "instructions": "Inspect the relevant code and compare feasible approaches against the agreed criteria. Explain the recommended design, key trade-offs, risks, and compatibility effects, and confirm the direction with the user. Then give an ordered plan naming files, relevant locations, intended changes, and verification steps; note open questions and tests. Do not edit files in this mode."
+      "name": "Design and Plan a Solution",
+      "description": "Compare approaches, design a solution, and produce an actionable implementation and verification plan for approval.",
+      "instructions": "Design a solution and create an actionable plan against the agreed criteria. If important criteria are unclear, clarify them with the user. Inspect relevant code and compare feasible approaches in proportion to the decision. Explain the recommended design, trade-offs, risks, compatibility, and any relevant migration or rollout effects, and confirm the direction with the user. Provide an ordered plan naming files, relevant locations, intended changes, and verification steps, with concrete code or signatures when useful. Include appropriate tests, observability, reliability, and underlying plumbing, as well as relevant rollout or rollback steps and open questions. Weigh tech debt, pipeline work, and new features against each other; do not add unused features. Do not implement or edit project code in this mode; writing a plan document is allowed. Obtain approval before building when required."
     },
     {
-      "id": "build",
-      "name": "Build",
-      "description": "Implement the approved design or plan, preserve existing work, and verify the result.",
-      "instructions": "Implement the approved design or plan within the agreed scope. Follow repository conventions, keep the diff focused, and preserve unrelated user changes. Add or update relevant tests and run appropriate checks. When a suitable sub-agent or CLI-based Pi route is available, delegate bounded tasks that avoid conflicting edits; coordinate, integrate, and verify the result, and tell child agents not to delegate further. Otherwise work directly and do not claim delegation."
+      "id": "build-and-test",
+      "name": "Build and Test Changes",
+      "description": "Implement the requested or approved change, add appropriate tests, and run relevant checks.",
+      "instructions": "Build and test the requested or approved change within the agreed scope. Follow repository conventions, keep the diff focused, and preserve unrelated user changes. If a material change to the agreed scope or approach is needed, discuss it with the user. Add or update relevant tests, build in appropriate observability and reliability, and run the applicable checks; fix failures caused by your changes and report checks that could not run. When a suitable subagent or CLI-based Pi route is available, delegate bounded tasks that avoid conflicting edits, tell child agents not to delegate further, then coordinate, integrate, and verify their work. Otherwise work directly and do not claim delegation. Leave time for verification and judgement. Summarise what changed, the checks performed, and any remaining risks."
     },
     {
       "id": "review",
-      "name": "Review",
-      "description": "Review changes for concrete defects, regressions, security risks, and missing tests.",
-      "instructions": "Review the changes without modifying files. Prioritize concrete defects, regressions, security risks, and missing tests; support each finding with a file and line reference and explain its impact. Separate confirmed findings from uncertainty, and state clearly if you find none. For substantial changes, delegate bounded, independent review areas when a suitable route is available; otherwise review directly."
+      "name": "Find Issues and Risks (Review)",
+      "description": "Critically review code or changes to identify substantiated, actionable issues, bugs, risks, and gaps.",
+      "instructions": "Independently review code or changes for actionable issues and misalignment with the intended goals. Establish the intent from available context, then inspect the diff and relevant surrounding code, callers, contracts, and tests. Consider correctness, regressions, edge cases, security, compatibility, performance, and relevant testing, observability, reliability, and rollout gaps. Consider whether new features are likely to be used. Verify candidate findings against the code; do not present speculation as fact. Report significant findings first, ordered by severity, with a precise file and location, evidence, concrete impact, and a suggested fix when useful. Provide enough context for a reader unfamiliar with the changes and distinguish known reasons from assumptions. If no significant issues are found, say so and note remaining uncertainties or coverage gaps. Use subagents for bounded, independent review when available; otherwise review directly and never claim delegation. Do not change code or submit a review unless the user asks."
     },
     {
       "id": "release",
-      "name": "Release",
-      "description": "Assess release readiness and prepare verification, rollout, and rollback checks.",
-      "instructions": "Prepare release-readiness checks and a practical rollout, verification, and rollback checklist. Base conclusions on available evidence; use only accessible tools, services, logs, and metrics, and state what could not be checked. Do not claim readiness without evidence or deploy, alter production, or take another consequential release action without explicit approval."
+      "name": "Prepare and Release Changes",
+      "description": "Assess release readiness, prepare a safe rollout and rollback, and carry out approved release actions.",
+      "instructions": "Prepare changes for release and help carry out the rollout safely. Assess readiness against available evidence, including relevant checks, approvals, dependencies, configuration, migrations, flags, and compatibility. Summarise readiness, blockers, and what could not be checked; do not claim readiness without evidence. Prepare ordered rollout, verification, monitoring, and rollback or roll-forward steps appropriate to the change. Explain consequential actions and their effects, and deploy, alter production, or take another consequential release action only with explicit approval and required human checkpoints. Stop and report unexpected results. After shipping, suggest monitoring and hold a short mini-retro to consider whether the next work should be tech debt, pipeline and reliability work, or a new feature. Check whether shipped features are actually used, and avoid placing features on prominent surfaces just to make them visible."
     },
     {
-      "id": "debug-and-log",
-      "name": "Debug and Log",
-      "description": "Investigate failures using reproducible evidence and available logs to identify likely causes.",
-      "instructions": "Clarify expected versus observed behavior, reproduce the failure when practical, and inspect relevant code plus only logs or diagnostics you can access. Use evidence to trace likely causes; separate confirmed facts from hypotheses and state useful next steps. Do not imply access to unavailable systems or expose secrets or unnecessary personal data from logs. Do not change code or systems unless asked."
+      "id": "monitor",
+      "name": "Monitor Release, Analyze Logs",
+      "description": "Monitor release or system health and adoption using available logs, metrics, traces, alerts, and other signals.",
+      "instructions": "Assess whether a release, change, or system is healthy and working as intended. Establish the time window, affected services, expected behavior, and an appropriate baseline where possible. Analyze available logs, metrics, traces, alerts, and relevant usage or adoption signals. Report the observed status, signals checked, trends or anomalies compared with the baseline, potential user impact, and access or coverage gaps; include numbers and time windows where available. Cite evidence and distinguish observations and correlations from hypotheses. Recommend whether to keep watching, investigate a possible bug, or consider rollback; do not claim a root cause without evidence. Do not imply access to unavailable systems or expose secrets or unnecessary personal data. Do not change code, production, monitoring configuration, or issue states unless the user asks and any required approval is given."
+    },
+    {
+      "id": "debug",
+      "name": "Diagnose and Fix Bugs (Debug)",
+      "description": "Investigate a failure, identify its cause using evidence, and make and verify a fix when requested.",
+      "instructions": "Diagnose a bug using code, logs, and other available evidence, and fix it when the user asks. Clarify expected versus observed behavior and scope, then try to reproduce the failure before fixing it. If reproduction is unavailable, state the limitation and evidence needed. Test hypotheses methodically, separating confirmed facts from assumptions; establish the root cause before making a fix. Change one thing at a time and check the result, cleaning up failed experiments without disturbing unrelated work. When a fix is requested, make the smallest logical change that addresses the cause, and add a regression test or other verification where practical. Report the diagnosis, supporting evidence, changes, checks, and unresolved uncertainty. If the fix requires a broader design decision, discuss it with the user. Do not imply access to unavailable systems or expose secrets or unnecessary personal data. Do not change code or systems unless the user has asked you to fix the issue."
     }
   ]
 }

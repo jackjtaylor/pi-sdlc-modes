@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { Value } from "typebox/value";
-import { DEFAULT_CONFIG, loadConfig, ModeConfigSchema } from "../mode-config.ts";
+import { DEFAULT_CONFIG, loadConfig, ModeConfigSchema } from "../modeConfig.ts";
 
 const VALID_CONFIG = {
   cycleShortcut: "ctrl+shift+m",

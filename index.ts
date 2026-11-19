@@ -2,24 +2,23 @@ import { Type } from "typebox";
 import { Value } from "typebox/value";
 import { type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import { loadConfig, ModeStateEntrySchema, type ModeDefinition, type ModeStateEntry } from "./mode-config.ts";
+import { loadConfig, ModeStateEntrySchema, type ModeDefinition, type ModeStateEntry } from "./modeConfig.ts";
 
 const STATE_ENTRY_TYPE = "sdlc-mode-state";
+const ENABLED_STATE_ENTRY_TYPE = "sdlc-mode-enabled-state";
 const WIDGET_ID = "sdlc-mode";
 const SYSTEM_PROMPT_SECTION = "sdlc_mode";
-
-function normalizeModeSelector(value: string): string {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/&/g, " ")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-|-$/g, "");
-}
+const SET_MODE_TOOL_NAME = "sdlc_set_mode";
+const EnabledStateEntrySchema = Type.Object({
+  enabled: Type.Boolean(),
+  changedAt: Type.Number(),
+});
+type EnabledStateEntry = { enabled: boolean; changedAt: number };
 
 export default function sdlcModesExtension(pi: ExtensionAPI): void {
   const config = loadConfig();
   let activeModeId = config.initialMode;
+  let sdlcEnabled = true;
 
   const firstConfiguredMode = config.modes[0];
   if (!firstConfiguredMode) throw new Error("SDLC configuration must contain at least one mode.");
@@ -42,7 +41,25 @@ export default function sdlcModesExtension(pi: ExtensionAPI): void {
     activeModeId = config.initialMode;
   };
 
+  const restoreEnabledStateFromBranch = (ctx: ExtensionContext): void => {
+    const entries = ctx.sessionManager.getBranch();
+    for (let index = entries.length - 1; index >= 0; index--) {
+      const entry = entries[index];
+      if (!entry || entry.type !== "custom" || entry.customType !== ENABLED_STATE_ENTRY_TYPE) continue;
+      const stateData: unknown = entry.data;
+      if (!Value.Check(EnabledStateEntrySchema, stateData)) continue;
+      sdlcEnabled = stateData.enabled;
+      return;
+    }
+    sdlcEnabled = true;
+  };
+
   const updateModeIndicator = (ctx: ExtensionContext): void => {
+    if (!sdlcEnabled) {
+      ctx.ui.setWidget(WIDGET_ID, undefined);
+      ctx.ui.setStatus(WIDGET_ID, undefined);
+      return;
+    }
     const mode = getActiveMode();
     if (ctx.mode === "tui") {
       ctx.ui.setWidget(
@@ -89,43 +106,52 @@ export default function sdlcModesExtension(pi: ExtensionAPI): void {
   };
 
   const cycleMode = (ctx: ExtensionContext): void => {
+    if (!sdlcEnabled) return;
     const activeIndex = config.modes.findIndex((mode) => mode.id === activeModeId);
     const nextMode = config.modes[(activeIndex + 1 + config.modes.length) % config.modes.length] ?? firstConfiguredMode;
     setMode(nextMode.id, ctx);
   };
 
+  // Pi only declares a tool's guidelines to the model while the tool is active, so
+  // disabling SDLC also removes the mode-switch tool and its rules from the prompt.
+  const syncModeToolActivation = (): void => {
+    const otherActiveToolNames = pi.getActiveTools().filter((name) => name !== SET_MODE_TOOL_NAME);
+    pi.setActiveTools(sdlcEnabled ? [...otherActiveToolNames, SET_MODE_TOOL_NAME] : otherActiveToolNames);
+  };
+
+  const setSdlcEnabled = (enabled: boolean, ctx: ExtensionContext): void => {
+    if (sdlcEnabled === enabled) {
+      ctx.ui.notify(`SDLC is already ${enabled ? "on" : "off"}.`, "info");
+      return;
+    }
+    sdlcEnabled = enabled;
+    syncModeToolActivation();
+    pi.appendEntry<EnabledStateEntry>(ENABLED_STATE_ENTRY_TYPE, { enabled, changedAt: Date.now() });
+    updateModeIndicator(ctx);
+    ctx.ui.notify(`SDLC turned ${enabled ? "on" : "off"}.`, "info");
+  };
+
   const selectMode = async (args: string, ctx: ExtensionContext): Promise<void> => {
-    const selector = args.trim();
-    if (selector.length === 0) {
-      if (!ctx.hasUI) {
-        ctx.ui.notify(`Current mode: ${getActiveMode().name}. Use /sdlc next or /sdlc <mode>.`, "info");
-        return;
-      }
-      const selectedName = await ctx.ui.select(
-        "Choose an SDLC mode",
-        config.modes.map((mode) => mode.name),
-      );
-      if (!selectedName) return;
-      const selectedMode = config.modes.find((mode) => mode.name === selectedName);
-      if (selectedMode) setMode(selectedMode.id, ctx);
+    const selector = args.trim().toLowerCase();
+    if (selector === "on" || selector === "off") {
+      setSdlcEnabled(selector === "on", ctx);
       return;
     }
-
-    if (selector.toLowerCase() === "next") {
-      cycleMode(ctx);
+    if (selector.length > 0) {
+      ctx.ui.notify("Use /sdlc to choose a mode, or /sdlc on|off to enable or disable SDLC.", "error");
       return;
     }
-
-    const normalizedSelector = normalizeModeSelector(selector);
-    const selectedMode = config.modes.find(
-      (mode) => mode.id === normalizedSelector || normalizeModeSelector(mode.name) === normalizedSelector,
+    if (!ctx.hasUI) {
+      ctx.ui.notify(`Current mode: ${getActiveMode().name}. The mode picker requires an interactive UI.`, "info");
+      return;
+    }
+    const selectedName = await ctx.ui.select(
+      "Choose an SDLC mode",
+      config.modes.map((mode) => mode.name),
     );
-    if (!selectedMode) {
-      const availableModes = config.modes.map((mode) => mode.id).join(", ");
-      ctx.ui.notify(`Unknown SDLC mode "${selector}". Available: ${availableModes}, next.`, "error");
-      return;
-    }
-    setMode(selectedMode.id, ctx);
+    if (!selectedName) return;
+    const selectedMode = config.modes.find((mode) => mode.name === selectedName);
+    if (selectedMode) setMode(selectedMode.id, ctx);
   };
 
   pi.registerEntryRenderer<ModeStateEntry>(STATE_ENTRY_TYPE, (entry, _options, theme) => {
@@ -134,8 +160,14 @@ export default function sdlcModesExtension(pi: ExtensionAPI): void {
     return new Text(theme.fg("dim", `SDLC · ${data.modeName} — ${data.description}`), 0, 0);
   });
 
+  pi.registerEntryRenderer<EnabledStateEntry>(ENABLED_STATE_ENTRY_TYPE, (entry, _options, theme) => {
+    const data = Value.Check(EnabledStateEntrySchema, entry.data) ? entry.data : undefined;
+    if (!data) return new Text(theme.fg("dim", "SDLC availability changed"), 0, 0);
+    return new Text(theme.fg("dim", `SDLC turned ${data.enabled ? "on" : "off"}`), 0, 0);
+  });
+
   pi.registerTool({
-    name: "sdlc_set_mode",
+    name: SET_MODE_TOOL_NAME,
     label: "Set SDLC Mode",
     description:
       "Change the active SDLC mode after the user explicitly requests or clearly authorizes that phase change. If the user's intent is unclear, ask and wait for confirmation instead of switching.",
@@ -162,19 +194,11 @@ export default function sdlcModesExtension(pi: ExtensionAPI): void {
   });
 
   pi.registerCommand("sdlc", {
-    description: "Choose an SDLC mode, use /sdlc next, or select /sdlc <mode>",
+    description: "Choose an SDLC mode or turn SDLC on or off",
     getArgumentCompletions: (prefix) => {
       const choices = [
-        {
-          value: "next",
-          label: "next",
-          description: "Advance to the next SDLC mode",
-        },
-        ...config.modes.map((mode) => ({
-          value: mode.id,
-          label: mode.name,
-          description: mode.description,
-        })),
+        { value: "on", label: "on", description: "Enable SDLC for this session" },
+        { value: "off", label: "off", description: "Disable SDLC for this session" },
       ];
       const matches = choices.filter((choice) => choice.value.startsWith(prefix.toLowerCase()));
       return matches.length > 0 ? matches : null;
@@ -183,21 +207,29 @@ export default function sdlcModesExtension(pi: ExtensionAPI): void {
   });
 
   pi.registerShortcut(config.cycleShortcut, {
-    description: "Advance to the next SDLC mode",
+    description: "Advance to the next SDLC mode when SDLC is on",
     handler: async (ctx) => cycleMode(ctx),
   });
 
   pi.on("session_start", async (_event, ctx) => {
     restoreModeFromBranch(ctx);
+    restoreEnabledStateFromBranch(ctx);
+    syncModeToolActivation();
     updateModeIndicator(ctx);
   });
 
   pi.on("session_tree", async (_event, ctx) => {
     restoreModeFromBranch(ctx);
+    restoreEnabledStateFromBranch(ctx);
+    syncModeToolActivation();
     updateModeIndicator(ctx);
   });
 
   pi.on("before_agent_start", (event) => {
+    if (!sdlcEnabled) {
+      delete event.systemPromptOptions.sections[SYSTEM_PROMPT_SECTION];
+      return;
+    }
     const mode = getActiveMode();
     event.systemPromptOptions.sections[SYSTEM_PROMPT_SECTION] = [
       `## Active SDLC Mode: ${mode.name}`,

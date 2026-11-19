@@ -14,7 +14,7 @@
   ],
   "files": [
     "index.ts",
-    "mode-config.ts",
+    "modeConfig.ts",
     "DEFAULTS.json",
     "README.md"
   ],

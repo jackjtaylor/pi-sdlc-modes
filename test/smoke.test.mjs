@@ -5,32 +5,33 @@ import { join } from "node:path";
 import test from "node:test";
 import sdlcModesExtension from "../index.ts";
 
-test("registers SDLC commands and hooks, then records and prompts the selected mode", async () => {
+const TEST_CONFIG = {
+  cycleShortcut: "ctrl+shift+m",
+  initialMode: "discovery",
+  modes: [
+    {
+      id: "discovery",
+      name: "Discovery",
+      description: "Fixture discovery description.",
+      instructions: "Fixture discovery instructions.",
+    },
+    {
+      id: "build",
+      name: "Build",
+      description: "Fixture build description.",
+      instructions: "Fixture build instructions.",
+    },
+  ],
+};
+
+async function withExtension(run) {
   const temporaryAgentDir = await mkdtemp(join(tmpdir(), "pi-sdlc-modes-test-"));
   const configDirectory = join(temporaryAgentDir, "extensions", "pi-sdlc-modes");
   const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
-  const config = {
-    cycleShortcut: "ctrl+shift+m",
-    initialMode: "discovery",
-    modes: [
-      {
-        id: "discovery",
-        name: "Discovery",
-        description: "Fixture discovery description.",
-        instructions: "Fixture discovery instructions.",
-      },
-      {
-        id: "build",
-        name: "Build",
-        description: "Fixture build description.",
-        instructions: "Fixture build instructions.",
-      },
-    ],
-  };
 
   try {
     await mkdir(configDirectory, { recursive: true });
-    await writeFile(join(configDirectory, "config.json"), JSON.stringify(config));
+    await writeFile(join(configDirectory, "config.json"), JSON.stringify(TEST_CONFIG));
     process.env.PI_CODING_AGENT_DIR = temporaryAgentDir;
 
     const commands = new Map();
@@ -39,135 +40,64 @@ test("registers SDLC commands and hooks, then records and prompts the selected m
     const hooks = new Map();
     const entryRenderers = new Map();
     const appendedEntries = [];
+    const branchEntries = [];
+    const notifications = [];
+    const widgetUpdates = [];
+    const statusUpdates = [];
+    const pickerCalls = [];
+    const activeTools = ["read", "bash", "edit", "write", "sdlc_set_mode"];
+    let pickerSelection = "Build";
+
     const pi = {
       registerCommand: (name, options) => commands.set(name, options),
       registerTool: (tool) => tools.set(tool.name, tool),
       registerShortcut: (shortcut, options) => shortcuts.set(shortcut, options),
       registerEntryRenderer: (type, renderer) => entryRenderers.set(type, renderer),
-      appendEntry: (type, data) => appendedEntries.push({ type, data }),
+      appendEntry: (type, data) => {
+        const entry = { type: "custom", customType: type, data };
+        appendedEntries.push(entry);
+        branchEntries.push(entry);
+      },
       on: (event, handler) => hooks.set(event, handler),
+      getActiveTools: () => [...activeTools],
+      setActiveTools: (names) => {
+        activeTools.splice(0, activeTools.length, ...names);
+      },
     };
-    const notifications = [];
-    const branchEntries = [];
     const context = {
-      mode: "rpc",
-      hasUI: false,
+      mode: "tui",
+      hasUI: true,
       ui: {
         notify: (...args) => notifications.push(args),
-        setStatus: () => {},
-        setWidget: () => {},
+        select: async (...args) => {
+          pickerCalls.push(args);
+          return pickerSelection;
+        },
+        setStatus: (...args) => statusUpdates.push(args),
+        setWidget: (...args) => widgetUpdates.push(args),
       },
       sessionManager: { getBranch: () => branchEntries },
     };
 
     sdlcModesExtension(pi);
-
-    assert.ok(commands.has("sdlc"), "registers the /sdlc command");
-    assert.ok(tools.has("sdlc_set_mode"), "registers the model-callable mode switch tool");
-    assert.ok(shortcuts.has("ctrl+shift+m"), "registers the configured mode-cycle shortcut");
-    assert.ok(entryRenderers.has("sdlc-mode-state"), "registers the mode-state renderer");
-    assert.deepEqual(
-      [...hooks.keys()].sort(),
-      ["before_agent_start", "session_start", "session_tree"],
-      "registers all SDLC lifecycle hooks",
-    );
-
-    await commands.get("sdlc").handler("build", context);
-
-    assert.equal(appendedEntries.length, 1, "appends one state entry for the mode change");
-    assert.equal(appendedEntries[0].type, "sdlc-mode-state");
-    assert.deepEqual(
-      {
-        modeId: appendedEntries[0].data.modeId,
-        modeName: appendedEntries[0].data.modeName,
-        description: appendedEntries[0].data.description,
+    await run({
+      commands,
+      tools,
+      shortcuts,
+      hooks,
+      entryRenderers,
+      appendedEntries,
+      branchEntries,
+      notifications,
+      widgetUpdates,
+      statusUpdates,
+      pickerCalls,
+      activeTools,
+      setPickerSelection: (value) => {
+        pickerSelection = value;
       },
-      {
-        modeId: "build",
-        modeName: "Build",
-        description: "Fixture build description.",
-      },
-    );
-    assert.equal(typeof appendedEntries[0].data.changedAt, "number");
-
-    const promptEvent = { systemPromptOptions: { sections: {} } };
-    hooks.get("before_agent_start")(promptEvent);
-    assert.equal(
-      promptEvent.systemPromptOptions.sections.sdlc_mode,
-      [
-        "## Active SDLC Mode: Build",
-        "Fixture build description.",
-        "",
-        "Fixture build instructions.",
-        "",
-        "## Changing SDLC Modes",
-        "Use sdlc_set_mode only when the user explicitly requests a mode change or clearly authorizes moving to that phase.",
-        "Do not switch merely because another mode seems useful. If the user's intent is unclear, ask and wait for confirmation.",
-      ].join("\n"),
-    );
-    assert.deepEqual(notifications, []);
-
-    const setModeTool = tools.get("sdlc_set_mode");
-    assert.deepEqual(
-      setModeTool.parameters.properties.mode.enum,
-      ["discovery", "build"],
-      "limits tool selections to configured modes",
-    );
-    await setModeTool.execute("tool-call-discovery", { mode: "discovery" }, undefined, undefined, context);
-    await setModeTool.execute("tool-call-build", { mode: "build" }, undefined, undefined, context);
-
-    assert.equal(appendedEntries.length, 3, "the tool persists each successful mode change");
-    assert.equal(appendedEntries[2].type, "sdlc-mode-state");
-    assert.deepEqual(
-      {
-        modeId: appendedEntries[2].data.modeId,
-        modeName: appendedEntries[2].data.modeName,
-        description: appendedEntries[2].data.description,
-      },
-      {
-        modeId: "build",
-        modeName: "Build",
-        description: "Fixture build description.",
-      },
-    );
-
-    const nextPromptEvent = { systemPromptOptions: { sections: {} } };
-    hooks.get("before_agent_start")(nextPromptEvent);
-    assert.equal(
-      nextPromptEvent.systemPromptOptions.sections.sdlc_mode,
-      [
-        "## Active SDLC Mode: Build",
-        "Fixture build description.",
-        "",
-        "Fixture build instructions.",
-        "",
-        "## Changing SDLC Modes",
-        "Use sdlc_set_mode only when the user explicitly requests a mode change or clearly authorizes moving to that phase.",
-        "Do not switch merely because another mode seems useful. If the user's intent is unclear, ask and wait for confirmation.",
-      ].join("\n"),
-      "the tool-selected mode updates the next prompt",
-    );
-
-    branchEntries.push({
-      type: "custom",
-      customType: "sdlc-mode-state",
-      data: { modeId: "build", modeName: "Build", description: "Invalid saved state", changedAt: "yesterday" },
+      context,
     });
-    await hooks.get("session_start")({}, context);
-    const restoredPromptEvent = { systemPromptOptions: { sections: {} } };
-    hooks.get("before_agent_start")(restoredPromptEvent);
-    assert.match(
-      restoredPromptEvent.systemPromptOptions.sections.sdlc_mode,
-      /^## Active SDLC Mode: Discovery\n/,
-      "malformed saved entries do not restore an invalid mode",
-    );
-
-    const invalidEntryRenderer = entryRenderers.get("sdlc-mode-state")(
-      { data: { modeId: "build", modeName: "Build", description: "Invalid", changedAt: "yesterday" } },
-      {},
-      { fg: (_color, text) => text },
-    );
-    assert.equal(invalidEntryRenderer.render(80)[0]?.trimEnd(), "SDLC mode changed");
   } finally {
     if (previousAgentDir === undefined) {
       delete process.env.PI_CODING_AGENT_DIR;
@@ -176,4 +106,137 @@ test("registers SDLC commands and hooks, then records and prompts the selected m
     }
     await rm(temporaryAgentDir, { recursive: true, force: true });
   }
+}
+
+function createPromptEvent() {
+  return { systemPromptOptions: { sections: {} } };
+}
+
+test("picker-only mode selection, shortcuts, and the session-scoped on/off toggle work", async () => {
+  await withExtension(async (harness) => {
+    const {
+      commands,
+      tools,
+      shortcuts,
+      hooks,
+      entryRenderers,
+      appendedEntries,
+      branchEntries,
+      notifications,
+      widgetUpdates,
+      statusUpdates,
+      pickerCalls,
+      activeTools,
+      context,
+    } = harness;
+    const command = commands.get("sdlc");
+
+    assert.ok(command, "registers the /sdlc command");
+    assert.ok(tools.has("sdlc_set_mode"), "registers the model-callable mode switch tool");
+    assert.ok(shortcuts.has("ctrl+shift+m"), "registers the default Ctrl+Shift+M shortcut");
+    assert.ok(entryRenderers.has("sdlc-mode-state"), "registers the mode-state renderer");
+    assert.ok(entryRenderers.has("sdlc-mode-enabled-state"), "registers the enabled-state renderer");
+    assert.deepEqual(
+      [...hooks.keys()].sort(),
+      ["before_agent_start", "session_start", "session_tree"],
+      "registers all SDLC lifecycle hooks",
+    );
+
+    await hooks.get("session_start")({}, context);
+    const initialPrompt = createPromptEvent();
+    hooks.get("before_agent_start")(initialPrompt);
+    assert.match(initialPrompt.systemPromptOptions.sections.sdlc_mode, /^## Active SDLC Mode: Discovery\n/);
+
+    await command.handler("build", context);
+    await command.handler("next", context);
+    assert.equal(appendedEntries.length, 0, "typed mode names and next do not change modes");
+    assert.equal(notifications.at(-1)[1], "error");
+    assert.deepEqual(
+      command.getArgumentCompletions("").map(({ value }) => value),
+      ["on", "off"],
+      "only on/off arguments are offered as completions",
+    );
+
+    await command.handler("", context);
+    assert.deepEqual(pickerCalls[0], ["Choose an SDLC mode", ["Discovery", "Build"]]);
+    assert.equal(appendedEntries[0].customType, "sdlc-mode-state");
+    assert.equal(appendedEntries[0].data.modeId, "build");
+
+    const buildPrompt = createPromptEvent();
+    hooks.get("before_agent_start")(buildPrompt);
+    assert.match(buildPrompt.systemPromptOptions.sections.sdlc_mode, /^## Active SDLC Mode: Build\n/);
+
+    await shortcuts.get("ctrl+shift+m").handler(context);
+    assert.equal(appendedEntries.at(-1).data.modeId, "discovery", "the shortcut advances to the next mode");
+
+    await command.handler("off", context);
+    assert.equal(appendedEntries.at(-1).customType, "sdlc-mode-enabled-state");
+    assert.equal(appendedEntries.at(-1).data.enabled, false);
+    assert.deepEqual(widgetUpdates.at(-1), ["sdlc-mode", undefined], "off clears the TUI widget");
+    assert.deepEqual(statusUpdates.at(-1), ["sdlc-mode", undefined], "off clears the status indicator");
+
+    const offPrompt = createPromptEvent();
+    hooks.get("before_agent_start")(offPrompt);
+    assert.equal("sdlc_mode" in offPrompt.systemPromptOptions.sections, false, "off omits SDLC prompt guidance");
+    assert.equal(activeTools.includes("sdlc_set_mode"), false, "off deactivates the mode-switch tool");
+    assert.deepEqual(activeTools, ["read", "bash", "edit", "write"], "off keeps other tools active");
+
+    const entriesBeforeDisabledCycle = appendedEntries.length;
+    await shortcuts.get("ctrl+shift+m").handler(context);
+    assert.equal(appendedEntries.length, entriesBeforeDisabledCycle, "the cycle shortcut is a no-op while off");
+
+    await command.handler("", context);
+    assert.equal(appendedEntries.at(-1).customType, "sdlc-mode-state", "the picker remains usable while off");
+    assert.equal(appendedEntries.at(-1).data.modeId, "build");
+    const stillOffPrompt = createPromptEvent();
+    hooks.get("before_agent_start")(stillOffPrompt);
+    assert.equal("sdlc_mode" in stillOffPrompt.systemPromptOptions.sections, false);
+
+    await hooks.get("session_start")({}, context);
+    const resumedPrompt = createPromptEvent();
+    hooks.get("before_agent_start")(resumedPrompt);
+    assert.equal(
+      "sdlc_mode" in resumedPrompt.systemPromptOptions.sections,
+      false,
+      "a resumed session restores off state",
+    );
+
+    await command.handler("on", context);
+    assert.equal(appendedEntries.at(-1).data.enabled, true);
+    assert.equal(activeTools.includes("sdlc_set_mode"), true, "on reactivates the mode-switch tool");
+    const enabledPrompt = createPromptEvent();
+    hooks.get("before_agent_start")(enabledPrompt);
+    assert.match(enabledPrompt.systemPromptOptions.sections.sdlc_mode, /^## Active SDLC Mode: Build\n/);
+
+    await command.handler("off", context);
+    branchEntries.splice(0);
+    await hooks.get("session_start")({}, context);
+    assert.equal(activeTools.includes("sdlc_set_mode"), true, "a new session keeps SDLC tools on");
+    const newSessionPrompt = createPromptEvent();
+    hooks.get("before_agent_start")(newSessionPrompt);
+    assert.match(newSessionPrompt.systemPromptOptions.sections.sdlc_mode, /^## Active SDLC Mode: Discovery\n/);
+    assert.equal(appendedEntries.at(-1).customType, "sdlc-mode-enabled-state");
+  });
+});
+
+test("invalid saved mode and enabled-state entries do not restore invalid state", async () => {
+  await withExtension(async ({ hooks, branchEntries, context, activeTools }) => {
+    branchEntries.push(
+      {
+        type: "custom",
+        customType: "sdlc-mode-state",
+        data: { modeId: "build", modeName: "Build", description: "Invalid saved state", changedAt: "yesterday" },
+      },
+      {
+        type: "custom",
+        customType: "sdlc-mode-enabled-state",
+        data: { enabled: "no", changedAt: "yesterday" },
+      },
+    );
+    await hooks.get("session_start")({}, context);
+    const promptEvent = createPromptEvent();
+    hooks.get("before_agent_start")(promptEvent);
+    assert.match(promptEvent.systemPromptOptions.sections.sdlc_mode, /^## Active SDLC Mode: Discovery\n/);
+    assert.equal(activeTools.includes("sdlc_set_mode"), true, "invalid enabled state falls back to on");
+  });
 });
